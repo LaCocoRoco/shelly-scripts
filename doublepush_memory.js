@@ -3,6 +3,8 @@
 // Doppelklick bei 100 %    -> zurück auf den gemerkten Wert
 // Doppelklick bei "aus"    -> auf 100 % einschalten (gemerkter Wert bleibt)
 // Funktioniert mit und ohne aktivem Firmware-Doppelklick (button_doublepush).
+// Mit fastDetect reagiert das Script schon beim 2. Loslassen des Tasters statt
+// erst auf das double_push der Firmware (das kommt ca. 1 s später).
 // Gedacht für alle script-fähigen Shelly-Dimmer (Gen2/Gen3/Gen4/Pro).
 // Gen1 (Shelly Dimmer / Dimmer 2) kann keine Scripts.
 
@@ -31,7 +33,13 @@ let CONFIG = {
   full: 100,          // "Voll"-Helligkeit
   defaultSaved: 50,   // Startwert, solange noch nichts gemerkt wurde
   settleMs: 800,      // Wert gilt als "stabil", wenn er so lange unverändert war
-  actionDelayMs: 150, // kurz warten, bis die Firmware-Aktion durch ist
+  actionDelayMs: 150, // kurz warten, bis die Firmware-Aktion durch ist (nur ohne fastDetect)
+  // Schnellerkennung über btn_down/btn_up. Schaltet beim Start die
+  // Firmware-Doppelklick-Aktion ab (button_doublepush = null), da diese sonst
+  // das Ergebnis überschreibt. Auf false setzen, wenn das nicht gewünscht ist.
+  fastDetect: true,
+  doubleWindowMs: 500, // max. Zeit zwischen 1. und 2. Drücken
+  maxPressMs: 500,     // 2. Druck länger gehalten = Dimmen, kein Doppelklick
   debug: true
 };
 
@@ -104,6 +112,14 @@ for (let i = 0; i < CONFIG.map.length; i++) {
     }
     log("light " + JSON.stringify(l.id) + " gemerkt: " + JSON.stringify(l.saved));
   }, l);
+  if (CONFIG.fastDetect) {
+    Shelly.call("Light.SetConfig",
+      { id: l.id, config: { button_presets: { button_doublepush: null } } },
+      function (res, err, msg, l) {
+        log("light " + JSON.stringify(l.id) + " Firmware-Doppelklick aus: " +
+          (err === 0 ? "ok" : "Fehler " + JSON.stringify(err) + " " + msg));
+      }, l);
+  }
 }
 
 // Helligkeit laufend verfolgen
@@ -116,20 +132,26 @@ Shelly.addStatusHandler(function (ev) {
   if (changed) record(l);
 });
 
-// Doppelklick auswerten
-Shelly.addEventHandler(function (ev) {
-  if (ev.name !== "input" || !ev.info || ev.info.event !== "double_push") return;
-  let lid = lightForInput(ev.id);
-  if (lid === null) return;
+// Zustand der Schnellerkennung je Eingang
+let inputs = {};
+
+function getInput(id) {
+  let k = "i" + JSON.stringify(id);
+  if (inputs[k] === undefined) inputs[k] = { firstDown: 0, lastDown: 0, presses: 0, doneAt: 0 };
+  return inputs[k];
+}
+
+function handleDouble(lid, delay) {
   let l = getLight(lid);
   let prev = levelBefore(l);
-  log("double_push input " + JSON.stringify(ev.id) + ", vorher: " + JSON.stringify(prev));
+  log("doppelklick light " + JSON.stringify(lid) + ", vorher: " + JSON.stringify(prev));
   if (prev === null) return;
 
   let target;
+  let save = false;
   if (prev > 0 && prev < CONFIG.full) {
     l.saved = prev;
-    Shelly.call("KVS.Set", { key: kvsKey(l.id), value: JSON.stringify(prev) });
+    save = true;
     target = CONFIG.full;
   } else if (prev >= CONFIG.full) {
     target = l.saved;
@@ -137,10 +159,51 @@ Shelly.addEventHandler(function (ev) {
     target = CONFIG.full; // war aus
   }
 
-  Timer.set(CONFIG.actionDelayMs, false, function () {
+  // Erst schalten, dann speichern (KVS.Set ist langsam und würde Light.Set verzögern)
+  let apply = function () {
     log("light " + JSON.stringify(l.id) + " -> " + JSON.stringify(target));
     setBrightness(l.id, target);
-  });
+    if (save) Shelly.call("KVS.Set", { key: kvsKey(l.id), value: JSON.stringify(prev) });
+  };
+  if (delay > 0) Timer.set(delay, false, apply);
+  else apply();
+}
+
+// Doppelklick auswerten
+Shelly.addEventHandler(function (ev) {
+  if (ev.name !== "input" || !ev.info) return;
+  let e = ev.info.event;
+  if (e !== "double_push" && e !== "btn_down" && e !== "btn_up") return;
+  let lid = lightForInput(ev.id);
+  if (lid === null) return;
+  let inp = getInput(ev.id);
+  // Zeitstempel des Eingangs verwenden, unabhängig von der Script-Latenz
+  let t = ev.info.ts !== undefined ? ev.info.ts * 1000 : Shelly.getUptimeMs();
+
+  if (e === "double_push") {
+    // schon per Schnellerkennung behandelt?
+    if (Shelly.getUptimeMs() - inp.doneAt < 3000) return;
+    handleDouble(lid, CONFIG.actionDelayMs);
+    return;
+  }
+  if (!CONFIG.fastDetect) return;
+
+  if (e === "btn_down") {
+    if (inp.presses === 0 || t - inp.firstDown > CONFIG.doubleWindowMs) {
+      inp.firstDown = t;
+      inp.presses = 0;
+    }
+    inp.presses++;
+    inp.lastDown = t;
+    return;
+  }
+
+  // btn_up: genau der 2. kurze Druck innerhalb des Fensters
+  if (inp.presses === 2 && t - inp.lastDown <= CONFIG.maxPressMs) {
+    inp.presses = 3; // ein evtl. 3. Druck löst nicht erneut aus
+    inp.doneAt = Shelly.getUptimeMs();
+    handleDouble(lid, 0);
+  }
 });
 
 log("gestartet");

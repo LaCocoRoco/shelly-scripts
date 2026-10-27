@@ -12,6 +12,15 @@ Doppelklick-Memory für Shelly-Dimmer:
 
 Der gemerkte Wert wird im KVS gespeichert und übersteht einen Neustart.
 
+Mit `fastDetect: true` (Standard) erkennt das Script den Doppelklick selbst
+beim zweiten Loslassen des Tasters, statt auf das `double_push` der Firmware zu
+warten (ca. 1 s schneller). Dafür schaltet es beim Start die Firmware-Aktion für
+den Doppelklick ab (`button_presets.button_doublepush = null`).
+
+Hinweis: Liegt zwischen den beiden Klicks weniger als ca. 70 ms, erkennt der
+Eingang des Geräts nur einen Druck. Die Firmware wertet das dann als
+Einfachklick und schaltet das Licht um.
+
 ### Installation
 
 1. Weboberfläche des Shelly öffnen → *Scripts* → *Create script*
