@@ -1,45 +1,45 @@
-// Shelly Doppelklick-Memory
-// Doppelklick bei < 100 %  -> aktuellen Wert merken, auf 100 % fahren
-// Doppelklick bei 100 %    -> zurück auf den gemerkten Wert
-// Doppelklick bei "aus"    -> auf 100 % einschalten (gemerkter Wert bleibt)
-// Funktioniert mit und ohne aktivem Firmware-Doppelklick (button_doublepush).
-// Mit fastDetect reagiert das Script schon beim 2. Loslassen des Tasters statt
-// erst auf das double_push der Firmware (das kommt ca. 1 s später).
-// Gedacht für alle script-fähigen Shelly-Dimmer (Gen2/Gen3/Gen4/Pro).
-// Gen1 (Shelly Dimmer / Dimmer 2) kann keine Scripts.
+// Shelly double-push memory
+// Double push below 100 % -> remember current level, go to 100 %
+// Double push at 100 %    -> return to the remembered level
+// Double push when off    -> switch on at 100 % (remembered level is kept)
+// Works with and without the firmware double-push action (button_doublepush).
+// With fastDetect the script reacts on the 2nd button release instead of
+// waiting for the firmware double_push event (which arrives ~1 s later).
+// Intended for all script-capable Shelly dimmers (Gen2/Gen3/Gen4/Pro).
+// Gen1 (Shelly Dimmer / Dimmer 2) does not support scripts.
 
 let CONFIG = {
-  // Zuordnung Taster-Eingang -> Licht-Kanal, je Gerät anpassen.
-  // Eingänge zählen ab 0 (SW1 = input 0, SW2 = input 1, ...).
+  // Mapping button input -> light channel, adjust per device.
+  // Inputs are counted from 0 (SW1 = input 0, SW2 = input 1, ...).
   //
-  // Ein Kanal, ein Taster (in_mode "dim"), gilt für:
+  // One channel, one button (in_mode "dim"), applies to:
   //   Shelly Dimmer Gen3, Shelly Dimmer Gen4, Shelly Plus 0-10V Dimmer,
   //   Shelly Dimmer 0/1-10V PM Gen3, Shelly DALI Dimmer Gen3, Shelly Pro Dimmer 1PM
   //     [{ input: 0, light: 0 }]
   //
-  // Ein Kanal, zwei Taster auf ("dual_dim": SW1 heller, SW2 dunkler):
-  //   gleiche Geräte wie oben
+  // One channel, two buttons ("dual_dim": SW1 brighter, SW2 dimmer):
+  //   same devices as above
   //     [{ input: 0, light: 0 }, { input: 1, light: 0 }]
   //
-  // Shelly Pro Dimmer 2PM (zwei Kanäle):
-  //   ein Taster je Kanal:   [{ input: 0, light: 0 }, { input: 2, light: 1 }]
-  //   dual_dim je Kanal:     [{ input: 0, light: 0 }, { input: 1, light: 0 },
-  //                           { input: 2, light: 1 }, { input: 3, light: 1 }]
+  // Shelly Pro Dimmer 2PM (two channels):
+  //   one button per channel: [{ input: 0, light: 0 }, { input: 2, light: 1 }]
+  //   dual_dim per channel:   [{ input: 0, light: 0 }, { input: 1, light: 0 },
+  //                            { input: 2, light: 1 }, { input: 3, light: 1 }]
   //
-  // Eingänge, die anders verwendet werden (z. B. getrennt für eine Szene),
-  // NICHT eintragen, sonst löst auch dort ein Doppelklick die Funktion aus.
-  // Die Nummern lassen sich prüfen mit: http://<IP>/rpc/Shelly.GetStatus
+  // Do NOT list inputs used for something else (e.g. detached for a scene),
+  // otherwise a double push there triggers this function as well.
+  // Input numbers can be checked with: http://<IP>/rpc/Shelly.GetStatus
   map: [{ input: 0, light: 0 }],
-  full: 100,          // "Voll"-Helligkeit
-  defaultSaved: 50,   // Startwert, solange noch nichts gemerkt wurde
-  settleMs: 800,      // Wert gilt als "stabil", wenn er so lange unverändert war
-  actionDelayMs: 150, // kurz warten, bis die Firmware-Aktion durch ist (nur ohne fastDetect)
-  // Schnellerkennung über btn_down/btn_up. Schaltet beim Start die
-  // Firmware-Doppelklick-Aktion ab (button_doublepush = null), da diese sonst
-  // das Ergebnis überschreibt. Auf false setzen, wenn das nicht gewünscht ist.
+  full: 100,          // "full" brightness
+  defaultSaved: 50,   // initial value until a level has been remembered
+  settleMs: 800,      // level counts as "stable" once unchanged for this long
+  actionDelayMs: 150, // wait for the firmware action to finish (only without fastDetect)
+  // Fast detection via btn_down/btn_up. Disables the firmware double-push
+  // action on start (button_doublepush = null), otherwise it would override
+  // the result. Set to false if this is not wanted.
   fastDetect: true,
-  doubleWindowMs: 500, // max. Zeit zwischen 1. und 2. Drücken
-  maxPressMs: 500,     // 2. Druck länger gehalten = Dimmen, kein Doppelklick
+  doubleWindowMs: 500, // max. time between 1st and 2nd press
+  maxPressMs: 500,     // 2nd press held longer = dimming, not a double push
   debug: true
 };
 
@@ -65,7 +65,7 @@ function getLight(id) {
   return lights[k];
 }
 
-// Effektiver Pegel: 0 = aus, sonst Helligkeit
+// Effective level: 0 = off, otherwise brightness
 function record(l) {
   let now = Shelly.getUptimeMs();
   let level = l.on ? l.bri : 0;
@@ -91,7 +91,7 @@ function lightForInput(inputId) {
   return null;
 }
 
-// Initialisierung: aktuellen Zustand + gespeicherten Wert laden
+// Init: load current state + remembered level
 for (let i = 0; i < CONFIG.map.length; i++) {
   let l = getLight(CONFIG.map[i].light);
   if (l.initDone) continue;
@@ -122,7 +122,7 @@ for (let i = 0; i < CONFIG.map.length; i++) {
   }
 }
 
-// Helligkeit laufend verfolgen
+// Track brightness continuously
 Shelly.addStatusHandler(function (ev) {
   if (ev.name !== "light" || !ev.delta) return;
   let l = getLight(ev.id);
@@ -132,7 +132,7 @@ Shelly.addStatusHandler(function (ev) {
   if (changed) record(l);
 });
 
-// Zustand der Schnellerkennung je Eingang
+// Fast detection state per input
 let inputs = {};
 
 function getInput(id) {
@@ -156,10 +156,10 @@ function handleDouble(lid, delay) {
   } else if (prev >= CONFIG.full) {
     target = l.saved;
   } else {
-    target = CONFIG.full; // war aus
+    target = CONFIG.full; // was off
   }
 
-  // Erst schalten, dann speichern (KVS.Set ist langsam und würde Light.Set verzögern)
+  // Switch first, then save (KVS.Set is slow and would delay Light.Set)
   let apply = function () {
     log("light " + JSON.stringify(l.id) + " -> " + JSON.stringify(target));
     setBrightness(l.id, target);
@@ -169,7 +169,7 @@ function handleDouble(lid, delay) {
   else apply();
 }
 
-// Doppelklick auswerten
+// Handle double push
 Shelly.addEventHandler(function (ev) {
   if (ev.name !== "input" || !ev.info) return;
   let e = ev.info.event;
@@ -177,11 +177,11 @@ Shelly.addEventHandler(function (ev) {
   let lid = lightForInput(ev.id);
   if (lid === null) return;
   let inp = getInput(ev.id);
-  // Zeitstempel des Eingangs verwenden, unabhängig von der Script-Latenz
+  // Use the input timestamp, independent of script latency
   let t = ev.info.ts !== undefined ? ev.info.ts * 1000 : Shelly.getUptimeMs();
 
   if (e === "double_push") {
-    // schon per Schnellerkennung behandelt?
+    // already handled by fast detection?
     if (Shelly.getUptimeMs() - inp.doneAt < 3000) return;
     handleDouble(lid, CONFIG.actionDelayMs);
     return;
@@ -198,9 +198,9 @@ Shelly.addEventHandler(function (ev) {
     return;
   }
 
-  // btn_up: genau der 2. kurze Druck innerhalb des Fensters
+  // btn_up: exactly the 2nd short press within the window
   if (inp.presses === 2 && t - inp.lastDown <= CONFIG.maxPressMs) {
-    inp.presses = 3; // ein evtl. 3. Druck löst nicht erneut aus
+    inp.presses = 3; // a possible 3rd press does not trigger again
     inp.doneAt = Shelly.getUptimeMs();
     handleDouble(lid, 0);
   }
